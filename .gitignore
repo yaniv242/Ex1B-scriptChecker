@@ -1,0 +1,7 @@
+*.exe
+*/
+*.json
+.vscode/
+*.zip
+*.tar.gz
+*.log
