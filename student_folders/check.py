@@ -2,15 +2,104 @@ import os
 import subprocess
 
 
+class Student:
+    def __init__(self, student_dir):
+        self.student_dir = student_dir
+        self.compilation_errors = []
+        self.warning_messages = []
+        self.test_results = []
+        self.grade = 100  # Starting grade, adjust based on errors and warnings
+        self.extraction_penalty = 0  # Adjust based on extraction summary log
+        self.catched_errors = []
+
+    def compile_program(self, program):
+        source_file = os.path.join(self.student_dir, f"{program}.c")
+        exe_file = os.path.join(self.student_dir, program)
+ 
+        if os.path.exists(source_file):
+            result = subprocess.run(["gcc", source_file, "-o", exe_file], capture_output=True, text=True)
+            if result.returncode != 0:
+                self.compilation_errors.append(result.stderr)
+                self.grade -= 40  # Deduct points for compilation error
+            elif result.stderr:
+                self.warning_messages.append(result.stderr)
+                self.grade -= 7  # Deduct points for warnings
+        else:
+            self.compilation_errors.append(f"Source file {program}.c not found.")
+            self.grade -= 5  # Deduct points for missing file
+
+    
+    def summarize(self):
+        #expected_results 
+        # Print summary for a student
+        print(f"Summary for {self.student_dir}:")
+        print(f"Grade: {self.grade}")
+        print("Total Compilation Errors:" if self.compilation_errors else "No Compilation Errors")
+        print("Actual Compilation Errors:" if self.compilation_errors else "No Compilation Errors")
+        for error in self.compilation_errors:
+            print(error)
+        print("Total Warnings:" if self.warning_messages else "No Warnings")
+        print("Actual Warnings:" if self.warning_messages else "No Warnings")
+        for warning in self.warning_messages:
+            print(warning)
+        print("Test Results:")
+        for command, result in self.test_results:
+            print(f"{command}: {'Pass' if result else 'Fail'}")
+
+    def run_test(self, test):
+        try:
+            executable_path = os.path.abspath(os.path.join(self.student_dir, "ex1b.exe"))
+            output, stderr = "", ""
+            command_attempts = [("exit", 1), ("./exit", 1)]
+
+            for exit_cmd, timeout_duration in command_attempts:
+                process = subprocess.Popen([executable_path], cwd=self.student_dir, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                input_command = f"{test['command']}\n{exit_cmd}\n"
+                try:
+                    out, err = process.communicate(input=input_command, timeout=timeout_duration)
+                    output += out
+                    stderr += err
+                    if len(output) > 1024:
+                        output = output[:1024] + "\n... [output truncated]"
+                        break
+                except subprocess.TimeoutExpired:
+                    self.log_to_file(f"Timeout expired with '{exit_cmd}', process killed.\n")
+                    self.catched_errors.append(f"Timeout expired with '{exit_cmd}', process killed.\n")
+                    process.kill()
+                    out, err = process.communicate()
+                    output += out
+                    stderr += err
+                finally:
+                    process.terminate()
+
+                if not process.poll():
+                    break
+
+            self.log_to_file(f"Final Command Output:\n{output}\n")
+            if stderr:
+                self.log_to_file(f"Errors from stderr:\n{stderr}\n")
+                self.catched_errors.append(f"Errors from stderr: \n{stderr}\n")
+            actual_output = "error running test" if not output else output.strip()
+            self.test_results.append((test['command'], test['expected'] in actual_output))
+
+        except Exception as e:
+            self.log_to_file(f"Error running test '{test['command']}': {e}\n")
+            self.catched_errors.append(f"Error running test '{test['command']}': {e}\n")
+
+    def log_to_file(self, message):
+        with open(os.path.join(self.student_dir, "test_results.log"), 'a') as log_file:
+            log_file.write(message + "\n")   
 
 
 
 
+
+  
 # Test commands and their expected outputs
 tests = [
     {"command": "./str_str aa aabaa", "expected": "2"},
     {"command": "./max aa aaa aaaa", "expected": "aaaa 4"},
-    {"command": "./count aa aabaa", "expected": "4"},
+    {"command": "./count aa aabaa", "expected": "2"},
     {"command": "bad command", "expected": "error"},
 ]
 
@@ -27,132 +116,35 @@ def read_extraction_penalties(summary_log_path):
                 penalties[student_name] = 100 - score  # Calculate penalty
     return penalties
 
-
-
-def compile_programs(student_path, log_file):
-    for program in ['ex1b', 'str_str', 'count', 'max', 'shell']:
-        source_file = os.path.join(student_path, f"{program}.c")
-        # Check if the source file exists before attempting to compile
-        if os.path.exists(source_file):
-            try:
-                if program == 'shell':
-                    exe_path = os.path.join(student_path, "ex1b")
-                else:
-                    exe_path =  os.path.join(student_path, program)    
-                result = subprocess.run(["gcc", source_file, "-o",exe_path], capture_output=True, text=True)
-                if result.returncode == 0 and result.stderr:
-                    log_file.write(f"Compilation warning in {program}:\n{result.stderr}\n\n")
-                elif result.returncode != 0:
-                    log_file.write(f"Compilation error in {program}:\n{result.stderr}\n\n")
-                    return False
-            except Exception as e:
-                log_file.write(f"Error compiling {program}: {e}\n\n")
-                return False
-        else:
-            log_file.write(f"Source file not found for {program}\n\n")
-            # Decide if you want to return False or continue trying to compile other programs
-            # return False  # Uncomment if you want to stop compilation process for this student upon missing a file
-    return True
-def run_test(student_path, test, log_file):
-    try:
-        print('before popen')
-        executable_path = os.path.abspath(os.path.join(student_path, "ex1b.exe"))
-        output, stderr = "", ""
-        command_attempts = [("exit", 1), ("./exit", 1)]  # List of exit commands and timeouts
-
-        for exit_cmd, timeout_duration in command_attempts:
-            process = subprocess.Popen([executable_path], cwd=student_path, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            print(f"ex1b.exe process started with PID {process.pid}")
-            log_file.write(f"\n---\nExecuting command: {test['command']}\n")
-            
-            input_command = f"{test['command']}\n{exit_cmd}\n"
-            try:
-                out, err = process.communicate(input=input_command, timeout=timeout_duration)
-                output += out
-                if len(output) > 1024:  # Limit output capture to 1KB to prevent huge log files
-                    output = output[:1024] + "\n... [output truncated]"
-                    break  # Stop further attempts if output is too large
-                stderr += err
-            except subprocess.TimeoutExpired:
-                log_file.write(f"Timeout expired with '{exit_cmd}', process killed.\n")
-                process.kill()
-                out, err = process.communicate()
-                output += out
-                stderr += err
-            finally:
-                process.terminate()  # Ensure the process is terminated
-
-            if not process.poll():  # Check if the process has terminated
-                break  # Exit the loop if the process has exited
-
-        # Log the outputs
-        log_file.write(f"Final Command Output:\n{output}\n")
-        if stderr:
-            log_file.write(f"Errors:\n{stderr}\n")
-
-        # Check if the actual output matches expected
-        actual_output = "error running test" if not output else output.strip()
-        log_file.write(f"Test command: {test['command']}\nExpected output: {test['expected']}\nActual output: {actual_output}\n")
-        result = "Pass" if test['expected'] in actual_output else "Fail"
-        log_file.write(f"Result: {result}\n---\n")
-
-        return actual_output
-
-    except Exception as e:
-        log_file.write(f"Error running test '{test['command']}': {e}\n\n")
-        return "error running test"
-
-
-
-
-
-
-
-def log_test_results(log_file, test, test_output, scores, student_dir):
-    log_file.write(f"Test command: {test['command']}\n")
-    log_file.write(f"Expected output: {test['expected']}\n")
-    log_file.write(f"Actual output: {test_output}\n")
-    test_passed = test['expected'] in test_output
-    log_file.write("Result: " + ("Pass" if test_passed else "Fail") + "\n\n")
-
-    if not test_passed:
-        scores[student_dir] -= 7  # Deduct 7 points for each failed test
-
+# Main script
 main_dir = os.getcwd()
 extraction_summary_log_path = os.path.join(main_dir, "extraction_summary.log")
 extraction_penalties = read_extraction_penalties(extraction_summary_log_path)
-scores = {}
 
-for student_dir in os.listdir(main_dir):
-    student_path = os.path.join(main_dir, student_dir)
-    if not os.path.isdir(student_path): continue
+students = []  # List to hold Student objects
 
-    initial_score = 100 - extraction_penalties.get(student_dir, 0)
-    scores[student_dir] = initial_score
+final_summary_file_path = os.path.join(main_dir, "final_summary.log")
+with open(final_summary_file_path, 'w') as final_summary_file:
+    for student_dir in os.listdir(main_dir):
+        student_path = os.path.join(main_dir, student_dir)
+        if not os.path.isdir(student_path): continue
 
-    print(f"Processing: {student_dir}")
+        # Create a Student object for each directory
+        student = Student(student_dir)
+        student.extraction_penalty = extraction_penalties.get(student_dir, 0)  # Set extraction penalty if any
+        students.append(student)
 
-    with open(os.path.join(student_path, "test_results.log"), 'w') as log_file:
-        log_file.write(f"Checking {student_dir}...\n\n")
+        print(f"Processing: {student_dir}")
 
-        if compile_programs(student_path, log_file):
-            print(f"Compilation successful for {student_dir}")
-            for test_dict in tests:
-                print(f"Running test: {test_dict['command']} for {student_dir}")
-                if not run_test(student_path, test_dict, log_file):
-                    scores[student_dir] -= 7  # Deduct points for failed test
-        else:
-            scores[student_dir] -= 20
-            print(f"Compilation errors for {student_dir}")
+        # Compile programs for the student
+        for program in ['ex1b', 'str_str', 'count', 'max']:
+            student.compile_program(program)
 
-     
+        # Run tests for the student
+        for test in tests:
+            student.run_test(test)
 
- 
-
-
-
-with open(os.path.join(main_dir, "final_scores.log"), 'w') as score_log:
-    for student, score in scores.items():
-        score_log.write(f"{student}: {score} points\n")
-
-print("Checking complete. Results are logged in each student's directory.")
+        # Summarize the results for the student
+        student_summary = student.summarize()
+        final_summary_file.write(student_summary)
+        final_summary_file.write("\n" + "="*40 + "\n\n") 
