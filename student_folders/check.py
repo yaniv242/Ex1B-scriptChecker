@@ -4,6 +4,7 @@ import subprocess
 
 class Student:
     def __init__(self, student_dir):
+        
         self.student_dir = student_dir
         self.compilation_errors = []
         self.warning_messages = []
@@ -11,6 +12,25 @@ class Student:
         self.grade = 100  # Starting grade, adjust based on errors and warnings
         self.extraction_penalty = 0  # Adjust based on extraction summary log
         self.catched_errors = []
+        self.readme_content = self.read_readme()
+
+    def read_readme(self):
+        # Look for README or README.txt in the student's directory
+        readme_files = [file for file in os.listdir(self.student_dir) if file.lower().startswith('readme')]
+        readme_content = []
+        if readme_files:
+            readme_path = os.path.join(self.student_dir, readme_files[0])  # Consider the first README file found
+            try:
+                with open(readme_path, 'r') as readme_file:
+                    # Read the first 5 lines from the README file
+                    for _ in range(5):
+                        line = readme_file.readline()
+                        if not line:  # Stop if the file has less than 5 lines
+                            break
+                        readme_content.append(line.strip())
+            except Exception as e:
+                readme_content.append(f"Error reading README: {e}")
+        return readme_content
 
     def compile_program(self, program):
         source_file = os.path.join(self.student_dir, f"{program}.c")
@@ -28,63 +48,90 @@ class Student:
             self.compilation_errors.append(f"Source file {program}.c not found.")
             self.grade -= 5  # Deduct points for missing file
 
-    
     def summarize(self):
-        #expected_results 
-        # Print summary for a student
-        print(f"Summary for {self.student_dir}:")
-        print(f"Grade: {self.grade}")
-        print("Total Compilation Errors:" if self.compilation_errors else "No Compilation Errors")
-        print("Actual Compilation Errors:" if self.compilation_errors else "No Compilation Errors")
-        for error in self.compilation_errors:
-            print(error)
-        print("Total Warnings:" if self.warning_messages else "No Warnings")
-        print("Actual Warnings:" if self.warning_messages else "No Warnings")
-        for warning in self.warning_messages:
-            print(warning)
-        print("Test Results:")
-        for command, result in self.test_results:
-            print(f"{command}: {'Pass' if result else 'Fail'}")
+        summary = f"Summary for {self.student_dir}:\n"
+        summary += f"Grade: {self.grade - self.extraction_penalty}\n"
+        if self.readme_content:
+            summary += "README Content:\n"
+            summary += "\n".join(self.readme_content) + "\n\n"
+        else:
+            summary += "No README Content Found\n\n"    
+        summary += "Compilation Errors:\n"
+        if self.compilation_errors:
+            for error in self.compilation_errors:
+                summary += f"- {error}\n"
+        else:
+            summary += "No Compilation Errors\n"
+
+        summary += "Warnings:\n"
+        if self.warning_messages:
+            for warning in self.warning_messages:
+                summary += f"- {warning}\n"
+        else:
+            summary += "No Warnings\n"
+
+        summary += "Test Results:\n"
+        for command, actual, expected in self.test_results:
+            result = "Pass" if expected in actual else "Fail"
+            summary += f"Command: {command}\nExpected: {expected}\nActual: {actual}\nResult: {result}\n\n"
+
+        summary += f"Extraction Penalty: {self.extraction_penalty}\n"
+        summary += f"Final Grade: {self.grade - self.extraction_penalty}\n"
+
+        return summary
 
     def run_test(self, test):
-        try:
-            executable_path = os.path.abspath(os.path.join(self.student_dir, "ex1b.exe"))
-            output, stderr = "", ""
-            command_attempts = [("exit", 1), ("./exit", 1)]
+        max_output_size = 1024  # Limit the output size to 1KB
 
-            for exit_cmd, timeout_duration in command_attempts:
-                process = subprocess.Popen([executable_path], cwd=self.student_dir, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-                input_command = f"{test['command']}\n{exit_cmd}\n"
-                try:
-                    out, err = process.communicate(input=input_command, timeout=timeout_duration)
-                    output += out
-                    stderr += err
-                    if len(output) > 1024:
-                        output = output[:1024] + "\n... [output truncated]"
-                        break
-                except subprocess.TimeoutExpired:
-                    self.log_to_file(f"Timeout expired with '{exit_cmd}', process killed.\n")
-                    self.catched_errors.append(f"Timeout expired with '{exit_cmd}', process killed.\n")
-                    process.kill()
-                    out, err = process.communicate()
-                    output += out
-                    stderr += err
-                finally:
-                    process.terminate()
+        for exit_cmd, timeout_duration in [("exit", 1), ("./exit", 1)]:
+            try:
+                process = subprocess.Popen(
+                    [os.path.join(self.student_dir, "ex1b.exe")],
+                    cwd=self.student_dir,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
 
-                if not process.poll():
-                    break
+                # Send the test command followed by an exit command
+                test_input = f"{test['command']}\n{exit_cmd}\n"
+                stdout, stderr = process.communicate(input=test_input, timeout=timeout_duration)
 
-            self.log_to_file(f"Final Command Output:\n{output}\n")
-            if stderr:
-                self.log_to_file(f"Errors from stderr:\n{stderr}\n")
-                self.catched_errors.append(f"Errors from stderr: \n{stderr}\n")
-            actual_output = "error running test" if not output else output.strip()
-            self.test_results.append((test['command'], test['expected'] in actual_output))
+                # Truncate the output if it exceeds the maximum allowed size
+                if len(stdout) > max_output_size:
+                    stdout = stdout[:max_output_size] + "\n... [output truncated]"
 
-        except Exception as e:
-            self.log_to_file(f"Error running test '{test['command']}': {e}\n")
-            self.catched_errors.append(f"Error running test '{test['command']}': {e}\n")
+                self.log_test_result(test, stdout, stderr)
+
+            except subprocess.TimeoutExpired:
+                # Handle the case where the process did not terminate within the timeout
+                process.kill()
+                stdout, stderr = process.communicate()
+                self.log_to_file(f"Timeout expired with '{exit_cmd}', process killed.\n")
+                self.catched_errors.append(f"Timeout expired with '{exit_cmd}', process killed.\n")
+
+            except Exception as e:
+                self.log_to_file(f"Error running test '{test['command']}': {e}\n")
+                self.catched_errors.append(f"Error running test '{test['command']}': {e}\n")
+
+    def log_test_result(self, test, stdout, stderr):
+        # Log the output and stderr to the test result log
+        self.log_to_file(f"Test command: {test['command']}\n")
+        self.log_to_file(f"Output:\n{stdout}\n")
+        if stderr:
+            self.log_to_file(f"Errors:\n{stderr}\n")
+
+        # Determine the test result and append the command, actual output, and expected output
+        test_passed = test['expected'] in stdout
+        actual_output = stdout.strip()  # Clean the actual output
+        self.test_results.append((test['command'], actual_output, test['expected']))
+        result_str = "Pass" if test_passed else "Fail"
+        if not test_passed:
+            self.grade -= 5
+        self.log_to_file(f"Result: {result_str}\n")
+
+
 
     def log_to_file(self, message):
         with open(os.path.join(self.student_dir, "test_results.log"), 'a') as log_file:

@@ -3,18 +3,44 @@ import zipfile
 import tarfile
 import shutil
 
+import os, stat
 
+def check_permissions(path):
+    # Check for read, write, and execute permissions
+    is_readable = os.access(path, os.R_OK)
+    is_writable = os.access(path, os.W_OK)
+    permissions = {'readable': is_readable, 'writable': is_writable}
+    return permissions
 
-def handle_extraction_directory(student_path, log_entries):
+def handle_extraction_directory(student_path, log_entries, scores, student_dir):
+   
     contents_after_extraction = os.listdir(student_path)
-    # Check for a single new directory that might contain all the extracted contents
     if len(contents_after_extraction) == 1 and os.path.isdir(os.path.join(student_path, contents_after_extraction[0])):
+        print(f"Found an unwanted directory: {contents_after_extraction[0]}")
         unwanted_dir = contents_after_extraction[0]
         unwanted_dir_path = os.path.join(student_path, unwanted_dir)
-        for item in os.listdir(unwanted_dir_path):
-            shutil.move(os.path.join(unwanted_dir_path, item), student_path)
-        os.rmdir(unwanted_dir_path)  # Remove the now-empty unwanted directory
-        log_entries.append(f"Moved contents from unwanted directory '{unwanted_dir}' to the main directory.")
+        dir_permissions = check_permissions(unwanted_dir_path)
+
+        if not dir_permissions['readable'] or not dir_permissions['writable']:
+            log_entries.append(f"Permission denied for directory '{unwanted_dir}'. Readable: {dir_permissions['readable']}, Writable: {dir_permissions['writable']}")
+            return  # Exit the function if you don't have necessary permissions
+
+        try:
+            for item in os.listdir(unwanted_dir_path):
+                item_path = os.path.join(unwanted_dir_path, item)
+                item_permissions = check_permissions(item_path)
+
+                if item_permissions['readable'] and item_permissions['writable']:
+                    shutil.move(item_path, student_path)
+                else:
+                    log_entries.append(f"Permission denied for item '{item}'. Readable: {item_permissions['readable']}, Writable: {item_permissions['writable']}")
+
+            os.rmdir(unwanted_dir_path)
+            log_entries.append(f"Moved contents from unwanted directory '{unwanted_dir}' to the main directory.")
+            scores[student_dir] -= 15  # Deduct points for having an extra directory
+
+        except Exception as e:
+            log_entries.append(f"Error moving contents from unwanted directory '{unwanted_dir}': {e}")
 
 
 def unzip_and_extract_student_submissions(main_dir):
@@ -35,7 +61,7 @@ def unzip_and_extract_student_submissions(main_dir):
                 try:
                     with zipfile.ZipFile(file_path, 'r') as zip_ref:
                         zip_ref.extractall(student_path)
-                    log_entries.append(f"Extracted and deleted {file}")
+                        log_entries.append(f"Extracted and deleted {file}")
                     os.remove(file_path)  # Delete the zip file after extraction
                 except zipfile.BadZipFile:
                     log_entries.append(f"Error extracting {file}: Bad zip file")
@@ -46,22 +72,23 @@ def unzip_and_extract_student_submissions(main_dir):
                         tar_ref.extractall(student_path)
                         log_entries.append(f"TGZ archive found: {file}. Manual extraction required.")
                         score -= 15
-                    log_entries.append(f"Extracted and deleted {file}")
+                        log_entries.append(f"Extracted and deleted {file}")
                     os.remove(file_path)  # Delete the tgz file after extraction
-                    handle_extraction_directory(student_path, log_entries)
+               
                 except tarfile.TarError:
                     log_entries.append(f"Error extracting {file}: Bad tgz file")
                     score -= 20
             elif file.endswith('.rar'):
                 log_entries.append(f"RAR archive found: {file}. Manual extraction required.")
                 score -= 15
-            elif file.endswith('.tar'):
+            elif file.endswith('.tar.gz'):
                 log_entries.append(f"TAR archive found: {file}. Manual extraction required.")
                 score -= 15
                 # Note: Manual extraction required for .rar files or use an external tool
-
-        extraction_logs[student_dir] = log_entries
         scores[student_dir] = score
+        handle_extraction_directory(student_path, log_entries, scores, student_dir)
+        extraction_logs[student_dir] = log_entries
+        
 
     # Return the logs and scores for further processing
     return extraction_logs, scores
